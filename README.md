@@ -30,21 +30,18 @@ pl1.save_graphic('Main.svg')
 Child = Main.add_child(label='Child') # Add a child coordinate system to the main one
 Child.translate([2, 0, 0]*pq.m)
 Child.rotate_euler_local([1, 1, 1], 30*pq.deg)
-pl2 = Child.visualize(inherit=False)
-pl1.save_graphic('Child.svg')
+pl2 = Child.visualize(inherit=True, cmap='grey')
+pl2.save_graphic('Child.svg')
 
 Main.scale([1, 2, 2]*pq.m, inherit=False) # Scale the main coordinate system, but not its children
-pl3 = Main.visualize(inherit=True)
-pl1.save_graphic('both.svg')
+pl3 = Main.visualize(inherit=False)
+Child.visualize(pl3, inherit=False, cmap='magma')
+pl3.save_graphic('Both.svg')
 
 ```
 
-![Parent coordinate system](Main.svg)
-![Child coordinate system](Child.svg)
-![Both](both.svg)
-
-
-
-
+![Parent coordinate system](assets/Main.svg)
+![Child coordinate system](assets/Child.svg)
+![Both](assets/Both.svg)
 
 
