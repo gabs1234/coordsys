@@ -24,31 +24,27 @@ plotter = pv.Plotter()
 
 ```python
 Main = CoordinateSystem()
-Main.visualize(inherit=False).show()
+pl1 = Main.visualize(inherit=False)
+pl1.save_graphic('Main.svg')
 
 Child = Main.add_child(label='Child') # Add a child coordinate system to the main one
 Child.translate([2, 0, 0]*pq.m)
 Child.rotate_euler_local([1, 1, 1], 30*pq.deg)
-Child.visualize(inherit=False).show()
+pl2 = Child.visualize(inherit=False)
+pl1.save_graphic('Child.svg')
 
 Main.scale([1, 2, 2]*pq.m, inherit=False) # Scale the main coordinate system, but not its children
-Main.visualize(inherit=True).show()
+pl3 = Main.visualize(inherit=True)
+pl1.save_graphic('both.svg')
 
 ```
 
-
-    Widget(value='<iframe src="http://localhost:39627/index.html?ui=P_0x70139ff10bf0_11&reconnect=auto" class="pyv…
-
-
-
-    Widget(value='<iframe src="http://localhost:39627/index.html?ui=P_0x70139740f710_12&reconnect=auto" class="pyv…
+![Parent coordinate system](Main.svg)
+![Child coordinate system](Child.svg)
+![Both](both.svg)
 
 
 
-    Widget(value='<iframe src="http://localhost:39627/index.html?ui=P_0x701397408380_13&reconnect=auto" class="pyv…
 
 
 
-```python
-
-```
