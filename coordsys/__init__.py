@@ -1,4 +1,4 @@
-from .quaternions import Quaternion, RotationQuaternion
+from .transformations import Quaternion, RotationQuaternion
 from .coordinate_systems import CoordinateSystem
 from .utils import X_AX, Y_AX, Z_AX
 
