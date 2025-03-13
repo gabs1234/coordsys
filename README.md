@@ -17,31 +17,38 @@ import quantities as pq
 import numpy as np
 import matplotlib.pyplot as plt
 import pyvista as pv
-
-plotter = pv.Plotter()
 ```
 
 
 ```python
+plotter = pv.Plotter()
+
+# Create a random point cloud
+N = 100
+points = np.random.rand(N, 3)
+
+# Create a reference coordinate system
+Reference = CoordinateSystem()
+
+# Create a main coordinate system
 Main = CoordinateSystem()
-pl1 = Main.visualize(inherit=False)
-pl1.save_graphic('Main.svg')
 
+# Create a child coordinate system
 Child = Main.add_child(label='Child') # Add a child coordinate system to the main one
-Child.translate([2, 0, 0]*pq.m)
-Child.rotate_euler_local([1, 1, 1], 30*pq.deg)
-pl2 = Child.visualize(inherit=True, cmap='grey')
-pl2.save_graphic('Child.svg')
+Child.add_points(points)
+Child.translate([2, 2, 0]*pq.m)
+Child.rotate_euler_local([0, 1, 1], 30*pq.deg)
 
-Main.scale([1, 2, 2]*pq.m, inherit=False) # Scale the main coordinate system, but not its children
-pl3 = Main.visualize(inherit=False)
-Child.visualize(pl3, inherit=False, cmap='magma')
-pl3.save_graphic('Both.svg')
+Main.scale(3, inherit=False) # Scale the main coordinate system, but not its children
+Main.rotate_euler_local([1, 0, 0], 30*pq.deg, inherit=True)
 
+Reference.visualize(plotter=plotter, inherit=False, cmap='gray')
+Main.visualize(plotter=plotter, inherit=False, cmap='plasma')
+Child.visualize(plotter=plotter, inherit=False, cmap='viridis')
+
+plotter.save_graphic('assets/coordsys.svg')
 ```
 
-![Parent coordinate system](assets/Main.svg)
-![Child coordinate system](assets/Child.svg)
-![Both](assets/Both.svg)
+![example](assets/coordsys.svg)
 
 
