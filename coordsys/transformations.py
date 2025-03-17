@@ -1,7 +1,6 @@
 import numpy as np
 import quantities as q
 
-# Conditionally import CuPy
 try:
     import cupy as cp
     HAS_CUPY = True
@@ -9,44 +8,65 @@ except ImportError:
     HAS_CUPY = False
     cp = None
 
-# Backend selection
 class Backend:
     NUMPY = 'numpy'
     CUPY = 'cupy'
     
-    _current = NUMPY
+    # Map user-friendly names to internal backend names
+    _aliases = {
+        "cpu": NUMPY,
+        "gpu": CUPY,
+        "numpy": NUMPY,
+        "cupy": CUPY,
+    }
     
-    @classmethod
-    def get(cls):
-        if cls._current == cls.CUPY and not HAS_CUPY:
+    def __init__(self, device=None):
+        if device is None:
+            device = self.CUPY
+
+        # Convert the provided string to lower case and map it using aliases.
+        device = device.lower()
+        device = self._aliases.get(device, device)
+        if device == self.CUPY and not HAS_CUPY:
+            print("Warning: CuPy not available, falling back to NumPy")
+            self._current = self.NUMPY
+        else:
+            self._current = device
+
+        self.clear_memory()
+
+    def get(self):
+        if self._current == self.CUPY and not HAS_CUPY:
             print("Warning: CuPy not available, falling back to NumPy")
             return np
-        return cp if cls._current == cls.CUPY else np
-    
-    @classmethod
-    def set(cls, backend):
-        if backend == cls.CUPY and not HAS_CUPY:
-            print("Warning: CuPy not available, using NumPy instead")
-            cls._current = cls.NUMPY
-        else:
-            cls._current = backend
-    
-    @classmethod
-    def use_gpu(cls):
-        cls.set(cls.CUPY)
-    
-    @classmethod
-    def use_cpu(cls):
-        cls.set(cls.NUMPY)
+        return cp if self._current == self.CUPY else np
 
-    @classmethod
-    def to_numpy(cls, array):
-        xp = cls.get()
-        return array.get() if xp is cp else array
+    def set(self, device):
+        device = device.lower()
+        device = self._aliases.get(device, device)
+        if device == self.CUPY and not HAS_CUPY:
+            print("Warning: CuPy not available, using NumPy instead")
+            self._current = self.NUMPY
+        else:
+            self._current = device
+
+    def use_gpu(self):
+        self.set("gpu")
     
-    @classmethod
-    def to_device(cls, array):
-        xp = cls.get()
+    def use_cpu(self):
+        self.set("cpu")
+
+    def clear_memory(self):
+        if self._current == self.CUPY:
+            cp.get_default_memory_pool().free_all_blocks()
+            cp.get_default_pinned_memory_pool().free_all_blocks()
+
+    def to_numpy(self, array):
+        xp = self.get()
+        return array.get() if xp is cp else array
+
+    def to_device(self, array):
+        xp = self.get()
         return xp.asarray(array)
 
 class Quaternion:
@@ -54,7 +74,7 @@ class Quaternion:
     A class representing a quaternion.
     """
     def __init__(self, w, x, y, z):
-        self.q = np.array([w, x, y, z])
+        self.q = np.array([w, x, y, z], dtype=np.float32)
         self.normalized = False
         self._inverse = None
 
@@ -69,17 +89,18 @@ class Quaternion:
     
     @staticmethod
     def cross_product(vec1, vec2):
-        cross = np.cross(vec1.imag(), vec2.imag())
+        cross = np.cross(np.asarray(vec1.imag()), np.asarray(vec2.imag()))
         return Quaternion(0, *cross)
 
     @staticmethod
     def dot_product(vec1, vec2):
-        dot = np.dot(vec1.imag(), vec2.imag())
+        dot = np.dot(np.asarray(vec1.imag()), np.asarray(vec2.imag()))
         return Quaternion(dot, 0, 0, 0)
     
     @staticmethod
     def scalar_product(vec, scalar):
-        return Quaternion(*(vec.q * scalar))
+        scaled = np.asarray(vec.q) * scalar
+        return Quaternion(*scaled)
     
     def norm(self):
         return np.linalg.norm(self.q)
@@ -102,8 +123,6 @@ class Quaternion:
         return Quaternion(*(self.q - other.q))
     
     def __mul__(self, other):
-        # GPU-optimized quaternion multiplication using vectorized operations
-        
         # Extracting components in a vectorized way
         w1, v1 = self.q[0], self.q[1:]
         w2, v2 = other.q[0], other.q[1:]
@@ -113,7 +132,7 @@ class Quaternion:
         v = w1 * v2 + w2 * v1 + np.cross(v1, v2)
         
         # Create resulting quaternion
-        result = np.empty(4, dtype=self.q.dtype)
+        result = np.zeros(4, dtype=np.float32)
         result[0] = w
         result[1:] = v
         
@@ -123,9 +142,7 @@ class Quaternion:
         return Quaternion(*(self.q / scalar))
     
     def __str__(self):
-        # Convert to numpy for string representation if needed
-        q_values = Backend.to_numpy(self.q)
-        return f"({q_values[0]}, {q_values[1]}, {q_values[2]}, {q_values[3]})"
+        return f"({self.q[0]}, {self.q[1]}, {self.q[2]}, {self.q[3]})"
 
 class RotationQuaternion(Quaternion):
     """
@@ -133,21 +150,21 @@ class RotationQuaternion(Quaternion):
     Non vectorized version.
     """
     def __init__(self, angle, axis):
-        self.angle = angle.rescale(q.rad)
-
-        half_angle = self.angle / 2
-        
+        if hasattr(angle, 'rescale'):
+            angle_rad = angle.rescale(q.rad).magnitude
+        else:
+            angle_rad = angle
+        self.angle = angle_rad
+        half_angle = angle_rad / 2
         if len(axis) == 4:
             axis = axis[:3]
-
-        # Convert axis to device array if needed
-        axis = Backend.to_device(axis)
-        
         sin_half_angle = np.sin(half_angle)
         axis_norm = np.linalg.norm(axis)
-
-        super().__init__(np.cos(half_angle), *(axis * sin_half_angle / axis_norm))
-
+        w, x, y, z = [np.cos(half_angle), 
+                    axis[0]*sin_half_angle/axis_norm,
+                    axis[1]*sin_half_angle/axis_norm,
+                    axis[2]*sin_half_angle/axis_norm]
+        super().__init__(w, x, y, z)
         self.normalized = True
     
     @property
@@ -155,11 +172,10 @@ class RotationQuaternion(Quaternion):
         """
         Homogeneous Orthogonal Matrix representation of the quaternion.
         """
-        xp = Backend.get()
         if not self.normalized:
             self.normalize()
         w, x, y, z = self.q
-        return xp.array([
+        return np.array([
             [w*w + x*x - y*y - z*z, 2*x*y - 2*w*z, 2*x*z + 2*w*y, 0],
             [2*x*y + 2*w*z, w*w - x*x + y*y - z*z, 2*y*z - 2*w*x, 0],
             [2*x*z - 2*w*y, 2*y*z + 2*w*x, w*w - x*x - y*y + z*z, 0],
@@ -167,298 +183,291 @@ class RotationQuaternion(Quaternion):
         ])
     
     def rotate(self, v):
-        # Convert v to device array if needed
-        v_device = Backend.to_device(v)
-        q = Quaternion(0, *v_device)
+        # Combine scalar zero with the vector into a single GPU array
+        q_input = np.concatenate([np.zeros(1, dtype=v.dtype), v], axis=0)
+        q = Quaternion(*q_input)
         lhs = self
-        if not self.normalized:
-            rhs = self.inverse()
-        else:
-            rhs = self.conjugate()
-
+        rhs = self.inverse() if not self.normalized else self.conjugate()
         rotated_vector = (lhs * q * rhs).imag()
         
         try:
-            return Backend.to_numpy(rotated_vector) * v.units
+            return rotated_vector * v.units
         except AttributeError:
-            return Backend.to_numpy(rotated_vector)
+            return rotated_vector
         
 
 class Transformation(object):
     """
     A class representing a transformation matrix. Uses backend to determine whether to use NumPy or CuPy.
     """
-    def __init__(self, matrix=None):
-        xp = Backend.get()
-        if matrix is None:
-            # Initialize with identity matrix
-            self.matrix = xp.eye(4, dtype=xp.float64)
-        else:
-            # Use the provided matrix
-            self.matrix = Backend.to_device(matrix)
+    def __init__(self, matrix=None, device=None, dtype=None):
+        self.backend = Backend(device)
+        self._xp = self.backend.get()
 
-    def clear(self):
+        if dtype is None:
+            self.dtype = np.float32
+        else:
+            self.dtype = dtype
+
+        if matrix is None:
+            self.matrix = self._xp.eye(4, dtype=self.dtype)
+        else:
+            self.matrix = self._xp.asarray(matrix, dtype=self.dtype)
+
+    def reset(self):
         """
-        Clear the transformation matrix.
+        Reset the transformation matrix.
         """
-        self.matrix = Backend.get().eye(4, dtype=Backend.get().float64)
+        self.matrix = self._xp.eye(4, dtype=self.dtype)
+        self.backend.clear_memory()
 
     def apply(self, points):
         """
         Apply transformation to an array of points.
-        Points can be a single point [x,y,z] or array of points [[x1,y1,z1], [x2,y2,z2], ...].
+        Points can be a single point [x, y, z] or an array of points [[x1, y1, z1], ...].
         """
-        # Store original units if present
+        # Store original units if present.
         has_units = hasattr(points, 'units')
         units = getattr(points, 'units', None)
         
-        xp = Backend.get()
-        original_shape = points.shape
-        is_single_point = len(original_shape) == 1
-        
-        # Convert to homogeneous coordinates
-        if is_single_point:
-            homogeneous_points = xp.ones(4, dtype=xp.float64)
-            homogeneous_points[:3] = Backend.to_device(points)
+        xp = self._xp
+        points = self.backend.to_device(points)
+
+        # Ensure self.matrix is on the same device
+        matrix = self.backend.to_device(self.matrix)
+
+        if points.ndim == 1:
+            # Pre-allocate homogeneous coordinate array.
+            homogeneous = xp.ones(4, dtype=self.dtype)
+            homogeneous[:3] = points
+            result = matrix @ homogeneous
+
+            w = result[3]
+            if not xp.isclose(w, 0) and w != 1:
+                result[:3] /= w
+            transformed = result[:3]
         else:
-            num_points = original_shape[0]
-            homogeneous_points = xp.ones((num_points, 4), dtype=xp.float64)
-            homogeneous_points[:, :3] = Backend.to_device(points)
-        
-        # Apply transformation
-        if is_single_point:
-            result = xp.dot(self.matrix, homogeneous_points)
-            # Convert back from homogeneous coordinates
-            if result[3] != 0 and result[3] != 1:
-                result = result / result[3]
-            transformed_points = result[:3]
-        else:
-            result = xp.dot(homogeneous_points, self.matrix.T)
-            # Convert back from homogeneous coordinates
-            non_zero_w = result[:, 3] != 0
-            result[non_zero_w] = result[non_zero_w] / result[non_zero_w, 3:4]
-            transformed_points = result[:, :3]
-            
-        # Return result with original units if applicable
-        result = Backend.to_numpy(transformed_points)
-        if has_units:
-            return result * units
-        return result
-            
+            num_points = points.shape[0]
+            homogeneous = xp.ones((num_points, 4), dtype=self.dtype)
+            homogeneous[:, :3] = points
+
+            result = homogeneous @ matrix.T
+
+            # Avoid division by near-zero values
+            w = result[:, 3]  # Make w a 1D array
+            mask = xp.abs(w) > 1e-10
+            transformed = xp.empty_like(result[:, :3])
+            transformed[mask] = result[mask, :3] / w[mask, None]  # Add None for broadcasting
+            transformed[~mask] = result[~mask, :3]
+
+        result_np = self.backend.to_numpy(transformed)
+        return result_np * units if has_units else result_np
+    
     def compose(self, other):
         """
         Compose this transformation with another transformation.
         Returns a new transformation that applies this transformation followed by the other.
         """
-        xp = Backend.get()
+        xp = self._xp
         result_matrix = xp.dot(other.matrix, self.matrix)
-        return Transformation(result_matrix)
+        return Transformation(result_matrix, device=self.backend._current)
         
     def inverse(self):
         """
         Return the inverse transformation.
         """
-        xp = Backend.get()
+        xp = self._xp
         inv_matrix = xp.linalg.inv(self.matrix)
-        return Transformation(inv_matrix)
+        return Transformation(inv_matrix, device=self.backend._current)
         
-    @staticmethod
-    def translation(x=0.0, y=0.0, z=0.0):
+    def translation(self, x=0.0, y=0.0, z=0.0):
         """
-        Create a translation transformation.
+        Apply a translation transformation to the current matrix.
         """
-        xp = Backend.get()
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 3] = x
-        matrix[1, 3] = y
-        matrix[2, 3] = z
-        return Transformation(matrix)
+        xp = self._xp
+        trans_matrix = xp.eye(4, dtype=self.dtype)
+        trans_matrix[0, 3] = x
+        trans_matrix[1, 3] = y
+        trans_matrix[2, 3] = z
+        self.matrix = xp.dot(trans_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def from_vector(v):
+    def from_vector(self, v):
         """
-        Create a translation transformation from a vector.
+        Apply a translation transformation from a vector.
         """
-        v = Backend.to_device(v)
-        return Transformation.translation(v[0], v[1], v[2])
+        v = self.backend.to_device(v)
+        return self.translation(v[0], v[1], v[2])
         
-    @staticmethod
-    def rotation_x(angle):
+    def rotation_x(self, angle):
         """
-        Create a rotation around the x-axis.
+        Apply a rotation around the x-axis.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        c, s = xp.cos(angle_rad), xp.sin(angle_rad)
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[1, 1] = c
-        matrix[1, 2] = -s
-        matrix[2, 1] = s
-        matrix[2, 2] = c
-        return Transformation(matrix)
+        c, s = self._xp.cos(angle_rad), self._xp.sin(angle_rad)
+        rot_matrix = self._xp.eye(4, dtype=self.dtype)
+        rot_matrix[1, 1] = c
+        rot_matrix[1, 2] = -s
+        rot_matrix[2, 1] = s
+        rot_matrix[2, 2] = c
+        self.matrix = self._xp.dot(rot_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def rotation_y(angle):
+    def rotation_y(self, angle):
         """
-        Create a rotation around the y-axis.
+        Apply a rotation around the y-axis.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        c, s = xp.cos(angle_rad), xp.sin(angle_rad)
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 0] = c
-        matrix[0, 2] = s
-        matrix[2, 0] = -s
-        matrix[2, 2] = c
-        return Transformation(matrix)
+        c, s = self._xp.cos(angle_rad), self._xp.sin(angle_rad)
+        rot_matrix = self._xp.eye(4, dtype=self.dtype)
+        rot_matrix[0, 0] = c
+        rot_matrix[0, 2] = s
+        rot_matrix[2, 0] = -s
+        rot_matrix[2, 2] = c
+        self.matrix = self._xp.dot(rot_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def rotation_z(angle):
+    def rotation_z(self, angle):
         """
-        Create a rotation around the z-axis.
+        Apply a rotation around the z-axis.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        c, s = xp.cos(angle_rad), xp.sin(angle_rad)
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 0] = c
-        matrix[0, 1] = -s
-        matrix[1, 0] = s
-        matrix[1, 1] = c
-        return Transformation(matrix)
+        c, s = self._xp.cos(angle_rad), self._xp.sin(angle_rad)
+        rot_matrix = self._xp.eye(4, dtype=self.dtype)
+        rot_matrix[0, 0] = c
+        rot_matrix[0, 1] = -s
+        rot_matrix[1, 0] = s
+        rot_matrix[1, 1] = c
+        self.matrix = self._xp.dot(rot_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def rotation(angle, axis):
+    def rotation(self, angle, axis):
         """
-        Create a rotation around an arbitrary axis.
-        Uses RotationQuaternion internally.
+        Apply a rotation around an arbitrary axis.
         """
-        return Transformation(RotationQuaternion(angle, axis).matrix)
+        if hasattr(angle, 'rescale'):
+            angle_rad = angle.rescale(q.rad).magnitude
+        else:
+            angle_rad = angle
+        rot_matrix = RotationQuaternion(angle_rad, axis).matrix
+        self.matrix = self._xp.dot(self._xp.asarray(rot_matrix), self.matrix)
+        return self
         
-    @staticmethod
-    def scaling(sx=1.0, sy=1.0, sz=1.0):
+    def scaling(self, sx=1.0, sy=1.0, sz=1.0):
         """
-        Create a scaling transformation.
+        Apply a scaling transformation.
         """
-        xp = Backend.get()
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 0] = sx
-        matrix[1, 1] = sy
-        matrix[2, 2] = sz
-        return Transformation(matrix)
+        scale_matrix = self._xp.eye(4, dtype=self.dtype)
+        scale_matrix[0, 0] = sx
+        scale_matrix[1, 1] = sy
+        scale_matrix[2, 2] = sz
+        self.matrix = self._xp.dot(scale_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def uniform_scaling(scale):
+    def uniform_scaling(self, scale):
         """
-        Create a uniform scaling transformation.
+        Apply a uniform scaling transformation.
         """
-        return Transformation.scaling(scale, scale, scale)
+        return self.scaling(scale, scale, scale)
         
-    @staticmethod
-    def shear_xy(angle):
+    def shear_xy(self, angle):
         """
-        Create a shear transformation in the xy plane.
+        Apply a shear transformation in the xy plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 1] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[0, 1] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def shear_xz(angle):
+    def shear_xz(self, angle):
         """
-        Create a shear transformation in the xz plane.
+        Apply a shear transformation in the xz plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, 2] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[0, 2] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def shear_yx(angle):
+    def shear_yx(self, angle):
         """
-        Create a shear transformation in the yx plane.
+        Apply a shear transformation in the yx plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[1, 0] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[1, 0] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def shear_yz(angle):
+    def shear_yz(self, angle):
         """
-        Create a shear transformation in the yz plane.
+        Apply a shear transformation in the yz plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[1, 2] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[1, 2] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def shear_zx(angle):
+    def shear_zx(self, angle):
         """
-        Create a shear transformation in the zx plane.
+        Apply a shear transformation in the zx plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[2, 0] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[2, 0] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def shear_zy(angle):
+    def shear_zy(self, angle):
         """
-        Create a shear transformation in the zy plane.
+        Apply a shear transformation in the zy plane.
         """
-        xp = Backend.get()
         angle_rad = angle.rescale(q.rad).magnitude if hasattr(angle, 'rescale') else angle
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[2, 1] = xp.tan(angle_rad)
-        return Transformation(matrix)
+        shear_matrix = self._xp.eye(4, dtype=self.dtype)
+        shear_matrix[2, 1] = self._xp.tan(angle_rad)
+        self.matrix = self._xp.dot(shear_matrix, self.matrix)
+        return self
         
-    @staticmethod
-    def look_at(eye, target, up=[0, 1, 0]):
+    def look_at(self, eye, target, up=[0, 1, 0]):
         """
-        Create a viewing transformation that looks from eye to target.
+        Apply a viewing transformation that looks from eye to target.
         """
-        xp = Backend.get()
-        eye = Backend.to_device(eye)
-        target = Backend.to_device(target)
-        up = Backend.to_device(up)
+        eye = self.backend.to_device(eye)
+        target = self.backend.to_device(target)
+        up = self.backend.to_device(up)
         
         # Calculate the forward vector (z)
         forward = eye - target
-        forward = forward / xp.linalg.norm(forward)
+        forward = forward / self._xp.linalg.norm(forward)
         
         # Calculate the right vector (x)
-        right = xp.cross(up, forward)
-        right = right / xp.linalg.norm(right)
+        right = self._xp.cross(up, forward)
+        right = right / self._xp.linalg.norm(right)
         
         # Recalculate the up vector (y)
-        up = xp.cross(forward, right)
+        up = self._xp.cross(forward, right)
         
         # Create the rotation part
-        matrix = xp.eye(4, dtype=xp.float64)
-        matrix[0, :3] = right
-        matrix[1, :3] = up
-        matrix[2, :3] = forward
+        view_matrix = self._xp.eye(4, dtype=self.dtype)
+        view_matrix[0, :3] = right
+        view_matrix[1, :3] = up
+        view_matrix[2, :3] = forward
         
         # Create the translation part
-        translation = xp.zeros(3)
-        translation[0] = -xp.dot(right, eye)
-        translation[1] = -xp.dot(up, eye)
-        translation[2] = -xp.dot(forward, eye)
+        translation = self._xp.zeros(3)
+        translation[0] = -self._xp.dot(right, eye)
+        translation[1] = -self._xp.dot(up, eye)
+        translation[2] = -self._xp.dot(forward, eye)
         
-        matrix[0:3, 3] = translation
+        view_matrix[0:3, 3] = translation
         
-        return Transformation(matrix)
+        self.matrix = self._xp.dot(view_matrix, self.matrix)
+        return self
         
     def __str__(self):
-        matrix_np = Backend.to_numpy(self.matrix)
+        matrix_np = self.backend.to_numpy(self.matrix)
         return f"Transformation(\n{matrix_np}\n)"
 
 

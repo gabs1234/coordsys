@@ -12,7 +12,8 @@ class CoordinateSystem:
                 u : np.array = None,
                 v : np.array = None,
                 w : np.array = None,
-                origin : np.array = None):
+                origin : np.array = None,
+                device=None):
         if u is None:
             self._u = X_AX.copy()
         else:
@@ -32,6 +33,14 @@ class CoordinateSystem:
         
         self._children = {}
         self._points = {}
+        
+        if device is not None:
+            self._device = device
+        else:
+            self._device = 'cpu'
+
+        self._transformation = Transformation(device=device)
+
     
     @property
     def u(self):
@@ -104,7 +113,12 @@ class CoordinateSystem:
     
     def get_global_coordinates(self, point):
         """Get the global coordinates of a point."""
-        return self._origin + self.get_local_coordinates(point)
+        # Get root origin 
+        parent = self
+        while parent.get_parent() is not None:
+            parent = self.get_parent()
+        root_origin = parent._origin
+        return root_origin + point
 
     def get_symmetric(self, r : q.quantity.Quantity, axis=None):
         if axis is None:
@@ -173,12 +187,13 @@ class CoordinateSystem:
         self._origin += axis * distance
 
         if inherit:
-            # Create a transformation for this translation
-            trans = Transformation.from_vector(axis * distance)
+            self._transformation.translation(axis[0] * distance, axis[1] * distance, axis[2] * distance)
             
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
+            
+            self._transformation.reset()
                 
             # Transform children
             for child in self._children:
@@ -191,13 +206,14 @@ class CoordinateSystem:
         self._origin += translation
         
         if inherit:
-            # Create a transformation for this translation
-            trans = Transformation.from_vector(translation)
+            self._transformation.translation(translation[0], translation[1], translation[2])
             
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
                 
+            self._transformation.reset()
+
             # Transform children
             for child in self._children:
                 self._children[child].translate(translation, inherit)
@@ -228,22 +244,15 @@ class CoordinateSystem:
         self._origin = r * W
 
         if inherit:
-            # Create a composite transformation
-            # 1. First translate back to origin
-            trans1 = Transformation.translation(-old_origin[0], -old_origin[1], -old_origin[2])
-            # 2. Then apply new position/orientation
-            trans2 = Transformation(np.array([
-                [U[0], V[0], W[0], self._origin[0]],
-                [U[1], V[1], W[1], self._origin[1]],
-                [U[2], V[2], W[2], self._origin[2]],
-                [0, 0, 0, 1]
-            ]))
-            # Compose transformations
-            trans = trans2.compose(trans1)
-            
+            # Create a transformation to move the origin
+            displaced = self._origin - old_origin
+            self._transformation.translation(displaced[0], displaced[1], displaced[2])
+
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
+            
+            self._transformation.reset()
                 
             # Transform children
             for child in self._children:
@@ -260,16 +269,15 @@ class CoordinateSystem:
         self._origin = np.array([x, y, z], dtype=np.float32) * x.units
 
         if inherit:
-            # Create a translation transformation
-            trans = Transformation.translation(
-                self._origin[0] - old_origin[0],
-                self._origin[1] - old_origin[1],
-                self._origin[2] - old_origin[2]
-            )
-            
+            # Create a transformation to move the origin
+            displaced = self._origin - old_origin
+            self._transformation.translation(displaced[0], displaced[1], displaced[2])
+
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
+            
+            self._transformation.reset()
                 
             # Transform children
             for child in self._children:
@@ -302,23 +310,18 @@ class CoordinateSystem:
         self._w = self._rotate_vector_euler(self._w, axis, angle)
 
         if inherit:
-            # Get root origin 
-            parent = self
-            while parent.get_parent() is not None:
-                parent = self.get_parent()
-            root_origin = parent._origin
-
             # Get global pivot point
-            global_pivot = root_origin - pivot
-            trans1 = Transformation.translation(-global_pivot[0], -global_pivot[1], -global_pivot[2])
-            trans2 = Transformation.rotation(angle, axis)
-            trans3 = Transformation.translation(global_pivot[0], global_pivot[1], global_pivot[2])
-            trans = trans3.compose(trans2.compose(trans1))
+            global_pivot = self.get_global_coordinates(pivot)
+            self._transformation.translation(-global_pivot[0], -global_pivot[1], -global_pivot[2]) 
+            self._transformation.rotation(angle, axis)
+            self._transformation.translation(global_pivot[0], global_pivot[1], global_pivot[2])
             
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
                 
+            self._transformation.reset()
+
             # Transform children
             for child in self._children:
                 self._children[child].rotate_euler(pivot, axis, angle, inherit)
@@ -333,15 +336,16 @@ class CoordinateSystem:
 
         if inherit:
             # Create a scaling transformation relative to origin
-            trans1 = Transformation.translation(-self._origin[0], -self._origin[1], -self._origin[2])
-            trans2 = Transformation.uniform_scaling(scale)
-            trans3 = Transformation.translation(self._origin[0], self._origin[1], self._origin[2])
-            trans = trans3.compose(trans2.compose(trans1))
+            self._transformation.translation(-self._origin[0], -self._origin[1], -self._origin[2])
+            self._transformation.uniform_scaling(scale)
+            self._transformation.translation(self._origin[0], self._origin[1], self._origin[2])
             
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
                 
+            self._transformation.reset()
+
             # Transform children
             for child in self._children:
                 self._children[child].scale(scale, inherit)
@@ -354,19 +358,23 @@ class CoordinateSystem:
 
         if inherit:
             # Create a non-uniform scaling transformation relative to origin
-            trans1 = Transformation.translation(-self._origin[0], -self._origin[1], -self._origin[2])
-            trans2 = Transformation.scaling(s1, s2, s3)
-            trans3 = Transformation.translation(self._origin[0], self._origin[1], self._origin[2])
-            trans = trans3.compose(trans2.compose(trans1))
+            self._transformation.translation(-self._origin[0], -self._origin[1], -self._origin[2])
+            self._transformation.scaling(s1, s2, s3)
+            self._transformation.translation(self._origin[0], self._origin[1], self._origin[2])
             
             # Transform points
             for key in self._points:
-                self._points[key] = trans.apply(self._points[key])
+                self._points[key] = self._transformation.apply(self._points[key])
+            
+            self._transformation.reset()
                 
             # Transform children
             for child in self._children:
                 self._children[child].scale_pointwise(s1, s2, s3, inherit)
                 self._children[child]._origin = self.get_global_coordinates(self._children[child]._origin)
+    
+    def to_global(self, point):
+        return self.get_global_coordinates(point)
     
     def visualize(self, plotter=None, cmap='viridis', inherit=True, show_points=True):
         if plotter is None:
@@ -396,50 +404,3 @@ class CoordinateSystem:
                 self._children[child].visualize(plotter, cmap=cmap, show_points=show_points)
 
         return plotter
-        
-    def get_world_to_local_transformation(self):
-        """
-        Get a transformation that converts world coordinates to local coordinates.
-        """
-        # Create rotation matrix from normalized basis vectors
-        u_norm = self._u / np.linalg.norm(self._u)
-        v_norm = self._v / np.linalg.norm(self._v)
-        w_norm = self._w / np.linalg.norm(self._w)
-        
-        # For world to local conversion:
-        # 1. Translate point to align with local origin
-        # 2. Rotate using the transposed rotation matrix
-        
-        # Create rotation matrix (where columns are basis vectors)
-        matrix = np.eye(4, dtype=np.float64)
-        matrix[:3, 0] = u_norm
-        matrix[:3, 1] = v_norm
-        matrix[:3, 2] = w_norm
-        
-        # Create translation matrix to move to local origin
-        trans = Transformation.translation(-self._origin[0], -self._origin[1], -self._origin[2])
-        
-        # Compose the transformations: first translate, then rotate
-        return Transformation(matrix.T).compose(trans)
-    
-    def get_local_to_world_transformation(self):
-        """
-        Get a transformation that converts local coordinates to world coordinates.
-        """
-        # Create transformation matrix from basis vectors and origin
-        matrix = np.eye(4, dtype=np.float64)
-        u_norm = self._u / np.linalg.norm(self._u)
-        v_norm = self._v / np.linalg.norm(self._v)
-        w_norm = self._w / np.linalg.norm(self._w)
-        
-        # For local to world conversion:
-        # 1. Rotate using the rotation matrix
-        # 2. Translate to world origin
-        
-        # Set columns of rotation matrix to normalized basis vectors
-        matrix[:3, 0] = u_norm
-        matrix[:3, 1] = v_norm
-        matrix[:3, 2] = w_norm
-        matrix[:3, 3] = self._origin
-        
-        return Transformation(matrix)

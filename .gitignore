@@ -25,7 +25,7 @@ ENV/
 *.swo
 
 # Project specific
-assets/*.svg
+# assets/*.svg
 
 # Local configuration
 .env
