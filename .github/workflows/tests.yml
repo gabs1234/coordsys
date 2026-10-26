@@ -24,4 +24,5 @@ jobs:
           python-version: '3.12'
       - run: uv sync --locked --group notebook
       - run: uv run --locked --group notebook marimo check --strict examples/geometry.py
-      - run: uv run --locked --group notebook marimo export html examples/geometry.py -o "$RUNNER_TEMP/coordsys.html"
+      - run: sudo apt-get update && sudo apt-get install -y libegl1 libvulkan1 mesa-vulkan-drivers
+      - run: uv run --locked --group notebook python -B -m unittest discover -s tests -p test_geometry_viewer.py -v

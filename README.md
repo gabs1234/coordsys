@@ -26,17 +26,21 @@ Plotting is optional:
 uv run --extra visualization python examples/simple_transform.py --show
 ```
 
-The interactive Marimo notebook replaces `README.ipynb`:
+The interactive Marimo notebook replaces `README.ipynb` (Python 3.11 or later):
 
 ```sh
 uv run --group notebook marimo edit examples/geometry.py
 ```
 
-It shows the reference, parent, and child frames in an interactive PyVista scene.
-The view has a white background and labels that stay upright as you rotate it.
-Rotation and scale controls rebuild the geometry; the world-position table helps
+It shows the reference, parent, and child frames and the child's points with
+fastplotlib. The view has a white background and labels that stay upright as you
+rotate it. Rotation and scale controls update the geometry while preserving your
+camera angle; **Reset view** fits the current setup. The world-position table helps
 check the result. To open it as an app, use
 `uv run --group notebook marimo run examples/geometry.py`.
+
+The notebook streams rendered images from Python to the browser. It needs a live
+Python session and does not produce an interactive standalone HTML export.
 
 `uv` installs the requested extras or dependency group automatically. The checked-in
 `uv.lock` records the development environment; use `--locked` to require that exact
@@ -161,13 +165,14 @@ handles bulk array operations. GPU pools are cleared only by an explicit
 uv run python -m unittest discover -s tests -v
 uv run python -m performance.run_benchmarks --cpu-only --points 100 10000 1000000 --runs 10
 uv run python -m performance.run_benchmarks --test operations --points 10000 --runs 10
-uv run --group notebook marimo check examples/geometry.py
+uv run --group notebook marimo check --strict examples/geometry.py
+uv run --group notebook python -m unittest discover -s tests -p test_geometry_viewer.py -v
 ```
 
 Tests cover quaternion identities, known geometric results, inverse round trips,
 frame inheritance, reparenting, units, dtype, and optional GPU behavior. GPU tests
 skip when a working device is unavailable. CI runs the CPU suite on Python 3.10,
-3.12, and 3.13.
+3.12, and 3.13, plus an offscreen render and geometry checks for the notebook.
 
 Benchmarks check results against a float64 homogeneous-coordinate calculation.
 They report setup, point upload, warmed array application, and download separately.
