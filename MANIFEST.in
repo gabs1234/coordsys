@@ -1,0 +1,3 @@
+recursive-include examples *.py
+recursive-include performance *.py
+recursive-include tests *.py

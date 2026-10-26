@@ -1,0 +1,27 @@
+name: Tests
+on: [push, pull_request]
+jobs:
+  cpu:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v9
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run --locked python -B -m unittest discover -s tests -v
+      - run: uv run --locked python -B examples/simple_transform.py
+      - run: uv run --locked python -B performance/run_benchmarks.py --cpu-only --points 10 100 --runs 2
+  notebook:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v9
+        with:
+          python-version: '3.12'
+      - run: uv sync --locked --group notebook
+      - run: uv run --locked --group notebook marimo check --strict examples/geometry.py
+      - run: uv run --locked --group notebook marimo export html examples/geometry.py -o "$RUNNER_TEMP/coordsys.html"

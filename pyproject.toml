@@ -1,3 +1,40 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "coordsys"
+version = "0.2.0"
+description = "Readable, unit-aware 3D coordinate frames and vectorized transformations"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{name = "Gabriel Lefloch", email = "gabriel.lefloch@kit.edu"}]
+dependencies = ["numpy>=1.24", "quantities>=0.16"]
+
+[project.optional-dependencies]
+visualization = ["pyvista>=0.43", "matplotlib>=3.6"]
+
+[project.urls]
+Repository = "https://github.com/gabs1234/QuaternionFrame"
+
+[dependency-groups]
+notebook = [
+    "marimo>=0.25.2",
+    "matplotlib>=3.6",
+    "pyvista>=0.49.1",
+    "trame-pyvista>=0.2.3",
+]
+
+[tool.setuptools.packages.find]
+include = ["coordsys*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "single"

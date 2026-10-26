@@ -38,3 +38,6 @@ htmlcov/
 
 # Documentation builds
 docs/_build/
+.venv/
+performance/results/
+__marimo__/
