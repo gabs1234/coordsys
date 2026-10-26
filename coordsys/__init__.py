@@ -1,13 +1,14 @@
+from .backend import gpu_available
 from .coordinate_systems import CoordinateSystem
-from .transformations import Backend, Quaternion, RotationQuaternion, Transformation
+from .rotation import Rotation
+from .transformations import Transformation
 from .utils import X_AX, Y_AX, Z_AX
 
 __all__ = [
-    'Backend',
-    'Quaternion',
-    'RotationQuaternion',
-    'Transformation',
     'CoordinateSystem',
+    'Rotation',
+    'Transformation',
+    'gpu_available',
     'X_AX',
     'Y_AX',
     'Z_AX',

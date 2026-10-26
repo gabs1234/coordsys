@@ -14,12 +14,12 @@ from coordsys import CoordinateSystem
 
 
 def make_scene():
-    root = CoordinateSystem()
-    child = root.add_child(label='cloud')
-    child.add_points(np.random.default_rng(0).random((1000, 3)), 'points', space='local')
+    root = CoordinateSystem(name='root')
+    child = CoordinateSystem(parent=root, name='cloud')
+    child.add_points(np.random.default_rng(0).random((1000, 3)), 'points')
     child.translate([2, 2, 0] * q.m)
-    child.rotate_euler_local([0, 1, 1], 30 * q.deg)
-    root.rotate_euler_local([1, 0, 0], 30 * q.deg)
+    child.rotate([0, 1, 1], 30 * q.deg)
+    root.rotate([1, 0, 0], 30 * q.deg)
     return root, child
 
 
@@ -29,7 +29,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     root, child = make_scene()
     print(child)
-    print(f'World point array: {child.get_points("points").shape}')
+    print(f'World point array: {child.get_points("points", space="world").shape}')
     if args.show:
         root.visualize().show()
 

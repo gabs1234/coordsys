@@ -47,9 +47,9 @@ Python session and does not produce an interactive standalone HTML export.
 dependency resolution. Notebook and plotting packages are optional and are not
 installed by a plain `uv sync`.
 
-CPU use needs only NumPy and quantities. To use `device='gpu'`, install a CuPy
-build matching your CUDA installation. An unavailable GPU raises an error;
-`Backend.gpu_available()` lets applications check first.
+CPU use needs only NumPy and quantities. Point arrays are processed where they
+live: pass CuPy arrays (with a CuPy build matching your CUDA installation) and
+results stay on the GPU. `gpu_available()` checks for a working device.
 
 ## Frames
 
@@ -58,119 +58,117 @@ import numpy as np
 import quantities as q
 from coordsys import CoordinateSystem
 
-world = CoordinateSystem()
-sensor = world.add_child(label='sensor')
-sensor.add_points([[1, 0, 0]], label='tip', space='local')
-sensor.translate([1, 0, 0] * q.m)
-sensor.rotate_euler_local([0, 0, 1], 90 * q.deg)
+robot = CoordinateSystem(name='robot')
+sensor = CoordinateSystem([1, 0, 0] * q.m, parent=robot, name='sensor')
+sensor.add_points([[1, 0, 0]], 'tip')
+sensor.rotate([0, 0, 1], 90 * q.deg)
 
-np.testing.assert_allclose(sensor.get_points('tip'), [[1, 1, 0]], atol=1e-14)
-np.testing.assert_allclose(sensor.to_local([1, 1, 0]), [1, 0, 0], atol=1e-14)
+np.testing.assert_allclose(sensor.get_points('tip', space='world'), [[1, 1, 0]], atol=1e-15)
+np.testing.assert_allclose(sensor.to_local([1, 1, 0]), [1, 0, 0], atol=1e-15)
 
-# A parent move carries the sensor and its points along.
-world.translate([0, 2, 0] * q.m)
-np.testing.assert_allclose(sensor.get_points('tip'), [[1, 3, 0]], atol=1e-14)
+# Moving the parent carries the sensor and its points along.
+robot.translate([0, 2, 0] * q.m)
+np.testing.assert_allclose(sensor.get_points('tip', space='world'), [[1, 3, 0]], atol=1e-15)
 ```
 
-Every frame stores **one local-to-parent 4×4 matrix**, a parent link, children,
-and local point arrays. Its world matrix is the product along the parent chain:
+A `CoordinateSystem` (a *frame*) is an origin, a rotation and one uniform scale
+factor. A negative scale reverses all three axes. Its axes `u`, `v` and `w` are
+therefore always orthogonal and of equal length, at any depth of the tree.
 
-```text
-world_from_child = world_from_parent @ parent_from_child
-world_point      = world_from_child @ local_point
-```
+Each frame stores only its pose relative to its parent, so children and attached
+points follow their parent without being updated. Points are stored in the
+frame's own coordinates.
 
-There is no separately maintained origin, orientation, or world point cache.
-`origin`, `u`, `v`, and `w` are derived from that matrix product. This keeps frame
-motion and attached geometry consistent, including rotated or scaled ancestors.
-
-| Operation | Meaning |
+| Method | Meaning |
 | --- | --- |
-| `to_global(p)` / `to_local(p)` | Inverse conversions between frame and world coordinates. |
-| `origin`, `u`, `v`, `w` | World-space position and basis vectors; assigning them moves attached geometry too. |
-| `add_child()` | Create a child coincident with its parent. |
-| `add_child(existing)` | Attach or reparent while preserving the existing world pose. |
-| `add_child(existing, keep_world=False)` | Interpret the existing local pose relative to the new parent. |
-| `remove_child(label)` | Detach while preserving world pose. |
-| `add_points(p, space='local')` | Attach geometry expressed in the frame's coordinates. |
-| `add_points(p)` / `get_points(label)` | World coordinates by default, preserving the older API convention. |
-| `translate(v)` | Move along a world-space vector. |
-| `rotate_euler(pivot, axis, angle)` | Axis-angle rotation about a world-space pivot and axis. |
-| `rotate_euler_local(axis, angle)` | Same rotation about the frame's own origin; the axis is still world-space. |
-| `scale(s)` / `scale_pointwise(x, y, z)` | Multiply existing axis lengths about the frame's origin. |
-| `set_cartesian_coordinates(x, y, z)` | Set world position; children retain their relative offsets. |
-| `set_spherical_coordinates(r, theta, phi)` | Set world position and radial orientation; theta is polar angle, phi azimuth. |
+| `CoordinateSystem(origin, rotation, scale, parent=None, name=None, unit=None)` | A frame, posed relative to `parent` (or the world). `rotation` is a `Rotation`; `unit` defaults to the parent's, else metres. |
+| `set_parent(parent, keep_world=True)` | Attach to another frame, or detach with `None`. By default the world pose is kept. |
+| `parent`, `children`, `child(name)`, `name` | Navigate the tree. Names are unique among siblings. |
+| `origin`, `rotation`, `scale_factor`, `u`, `v`, `w` | World pose (snapshots). |
+| `to_world(p)` / `to_local(p)` | Convert points between this frame and world coordinates. |
+| `translate(offset)` | Move by `offset`. |
+| `rotate(axis, angle, pivot=None)` | Rotate about `axis` through `pivot` (default: the frame's origin). |
+| `set_position(position)` | Place the origin. |
+| `set_spherical(r, theta, phi)` | Place the origin in spherical coordinates, with `w` pointing outward. |
+| `scale(factor)` / `flip()` | Scale the axes about the origin / reverse them. |
+| `add_points(p, label, space='local')` | Attach a copy of points. |
+| `get_points(label, space='local')` / `remove_points(label)` / `point_labels` | Read or detach points. |
+| `local_transform` / `world_transform` | `Transformation` snapshots of the pose. |
 
-Despite their historical names, the `rotate_euler*` methods take an axis and
-angle, not three Euler angles. Numeric angles are radians; quantities may use
-degrees. `normalize()` sets axis lengths to one without orthogonalizing a skew
-basis. `to_opposite()` reverses all three axes, changing handedness.
+Motion methods take `relative_to='parent'` (default), `'world'` or `'local'`.
+Their arguments are coordinates in that frame, so `relative_to='local'` moves
+along the frame's own axes, in units of its own (scaled) axis length.
 
-Transform methods default to `inherit=True`: attached points and descendants
-follow the frame. With `inherit=False`, they remain fixed in world space while
-the frame moves. Missing labels raise `KeyError`; duplicate labels, cycles,
-and singular frame bases are rejected. Automatic labels extend beyond 26 items.
+Motion methods also take `inherit=True`. With `inherit=False`, the frame's points
+and children stay where they are in the world while the frame moves.
 
-## Units, precision, and array behavior
+Angles are radians unless given as quantities. Duplicate labels, cycles in the
+tree and invalid input raise errors and leave the frame unchanged.
 
-Bare coordinates use the object's `unit`, which defaults to metres. Quantity
-inputs are converted before arithmetic and returned in their original units:
+## Transformations
+
+`Transformation` is an immutable affine map. Build one with a constructor and
+combine them with `@`, which applies the right-hand side first:
 
 ```python
 from coordsys import Transformation
 
-move = Transformation().translation(1 * q.m)
+move = Transformation.translation([1, 0, 0] * q.m)
+turn = Transformation.rotation([0, 0, 1], 90 * q.deg)
+both = turn @ move
+
+np.testing.assert_allclose(both.apply([0, 0, 0]), [0, 1, 0], atol=1e-15)
+np.testing.assert_allclose(both.inverse().apply([0, 1, 0]), [0, 0, 0], atol=1e-15)
+```
+
+Constructors: `translation`, `rotation`, `scaling` (one or three factors),
+`shear(plane, angle)`, and `look_at(eye, target, up)`. Use them on point clouds
+for maps a frame cannot represent, such as non-uniform scaling or shear.
+
+`apply()` accepts one point `(3,)` or a batch `(..., 3)`. `vectors=True` skips
+the translation, for directions and velocities. `Rotation` is the corresponding
+rotation-only type (`from_axis_angle`, `from_quaternion`, `quaternion`, `@`).
+
+## Units and arrays
+
+Bare numbers use the object's `unit` (metres by default). Quantities are
+converted first, and quantity results come back in their original units:
+
+```python
 p = np.array([[100, 0, 0]]) * q.cm
 np.testing.assert_allclose(move.apply(p).magnitude, [[200, 0, 0]])
 
-centimetres = Transformation(unit=q.cm).translation(100)
+centimetres = Transformation.translation([100, 0, 0], unit=q.cm)
 np.testing.assert_allclose(centimetres.apply([100, 0, 0]), [200, 0, 0])
 ```
 
-Frames use metres internally, including when parent and child expose different
-units. `local_transform` and `world_transform` return independent transformation
-snapshots expressed in the frame's unit; that unit describes both their input
-and output numerical coordinates. Quantity inputs avoid any ambiguity.
-
-`float64` is the default. Set `dtype=np.float32` explicitly for smaller point
-arrays. Inversion preserves dtype; composition promotes mixed dtypes and
-converts length units. Builders apply operations in call order, and
-`a.compose(b)` means “apply a, then b.”
-
-`Transformation.apply()` accepts one point `(3,)` or batches `(..., 3)`, including
-empty arrays. `vectors=True` omits translation and preserves vector units such
-as velocity. General projective matrices are supported for points; `w=0` raises
-an error. Coordinate frames require invertible affine matrices.
-
-CPU is the default backend. GPU input arrays stay on the GPU; NumPy inputs and
-quantity inputs return to the CPU. Pass `return_numpy=False` to keep the result
-on the selected backend, or `True` to request a NumPy result. Use a GPU frame and
-CuPy point arrays to keep attached point clouds on the device. Quantities remain
-CPU objects.
+Frames compute in metres internally, even when parent and child use different
+units. Attached points are stored as plain arrays in the frame's unit, keeping
+their dtype (e.g. `float32`) and device (NumPy or CuPy).
 
 ## Performance and tests
 
-Ordinary frame motion updates a small matrix without visiting descendants or
-rewriting point arrays. World transforms are computed along the ancestor chain
-when requested. Reuse a `world_transform` snapshot for repeated batches when the
-frame is stationary. `inherit=False` must re-express the frame's own points and
-direct child transforms to keep their world positions fixed.
+Moving a frame replaces one 4×4 matrix, without visiting descendants or
+rewriting point arrays. World poses are cached and recomputed only for frames
+whose ancestors changed. Unit conversion factors are cached too, since
+`quantities` conversions are slow. `inherit=False` re-expresses only the
+frame's own points and direct children.
 
-Point transforms use `points @ linear.T + translation`, avoiding an `N×4`
-homogeneous temporary. Small matrices stay on the CPU; the selected backend
-handles bulk array operations. GPU pools are cleared only by an explicit
-`Backend.clear_memory()` call.
+Typical costs on a laptop CPU: creating a frame or moving it ~10 µs, reading a
+cached world pose ~1 µs, recomputing it after an ancestor moved ~1.5 µs per
+level. Point transforms use `points @ linear.T + translation`.
 
 ```sh
 uv run python -m unittest discover -s tests -v
+uv run python -m performance.run_benchmarks --test frames
 uv run python -m performance.run_benchmarks --cpu-only --points 100 10000 1000000 --runs 10
 uv run python -m performance.run_benchmarks --test operations --points 10000 --runs 10
 uv run --group notebook marimo check --strict examples/geometry.py
 uv run --group notebook python -m unittest discover -s tests -p test_geometry_viewer.py -v
 ```
 
-Tests cover quaternion identities, known geometric results, inverse round trips,
-frame inheritance, reparenting, units, dtype, and optional GPU behavior. GPU tests
+Tests cover rotations, known geometric results, inverse round trips, frame
+inheritance, reparenting, units, dtype, and optional GPU behavior. GPU tests
 skip when a working device is unavailable. CI runs the CPU suite on Python 3.10,
 3.12, and 3.13, plus an offscreen render and geometry checks for the notebook.
 
@@ -180,11 +178,33 @@ GPU application timings synchronize the active stream and retain point arrays on
 the device; each call still uploads the small transform matrix. First-use kernel
 costs are excluded from the warmed application timing. Unavailable GPUs are omitted.
 
-## Changes from 0.1
+## Changes in 0.3
 
-The familiar method names remain, with the corrected coordinate conventions
-above. Defaults are now CPU and float64. Scaling is multiplicative and preserves
-orientation. New children inherit their parent's pose. Accessors return snapshots
-and `children` is read-only; use setters and add/remove methods instead of mutating
-returned arrays or dictionaries. Plotting dependencies moved to the optional
-`visualization` extra.
+The API was renamed for clarity; the old names are gone.
+
+| 0.2 | 0.3 |
+| --- | --- |
+| `translate(v)` (world vector) | `translate(v, relative_to='world')`; the default is now `'parent'` |
+| `rotate_euler(pivot, axis, angle)` | `rotate(axis, angle, pivot=pivot, relative_to='world')` |
+| `rotate_euler_local(axis, angle)` | `rotate(axis, angle, relative_to='world')` |
+| `to_global`, `get_global_coordinates` | `to_world` |
+| `get_local_coordinates` | `to_local` |
+| `set_cartesian_coordinates(x, y, z)` | `set_position([x, y, z])` |
+| `set_spherical_coordinates(...)` | `set_spherical(...)` |
+| `to_opposite()` | `flip()` |
+| `translate_along_axis(axis, d)` | `translate(d * axis)` |
+| `get_parent()` | `parent` |
+| `add_child(child, label)` | `CoordinateSystem(..., parent=p, name=label)`; the pose is relative to `p` |
+| `add_child(existing)` / `remove_child(label)` | `existing.set_parent(p)` / `child.set_parent(None)` |
+| `children` (dict of labels) | `children` (tuple), `child(name)` |
+| `label=` on motion methods | `frame.child(name).translate(...)` |
+| `u`/`v`/`w`/`origin` setters | constructor, `rotate`, `set_position` |
+| `scale_pointwise`, `normalize`, skewed axes | `Transformation.scaling` on points |
+| `get_symmetric`, `add_symmetric_child`, ... | `CoordinateSystem(offset, parent=p)`, `flip()` |
+| `add_points` / `get_points` default `space='world'` | default `space='local'`; `label` is required |
+| `Transformation().translation(...)` (mutating) | `Transformation.translation(...)` and `@` |
+| `a.compose(b)` | `b @ a` |
+| `Quaternion`, `RotationQuaternion` | `Rotation` |
+| `Backend`, `device=`, `dtype=` | arrays keep their own device and dtype |
+
+Frames are now restricted to rotation, translation and uniform scale.

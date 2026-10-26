@@ -7,14 +7,15 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from coordsys import Backend
+from coordsys import backend
+from performance import benchmark_frames
 from performance.benchmark_transformations import print_results, run_benchmarks
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        '--test', '-t', choices=['all', 'transformations', 'operations'], default='all'
+        '--test', '-t', choices=['all', 'frames', 'transformations', 'operations'], default='all'
     )
     parser.add_argument('--points', '-p', type=int, nargs='+', default=[100, 10000, 1000000])
     parser.add_argument('--runs', '-r', type=int, default=5)
@@ -22,16 +23,22 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.runs < 1 or any(n < 1 for n in args.points):
         parser.error('point counts and runs must be positive')
-    cpu_only = args.cpu_only or not Backend.gpu_available()
-    if cpu_only:
-        print(
-            'CPU only.' if args.cpu_only else 'Working CuPy/CUDA device unavailable; GPU omitted.'
-        )
+
+    if args.test in ('all', 'frames'):
+        benchmark_frames.print_results(benchmark_frames.run_benchmarks())
     operations = []
     if args.test in ('all', 'transformations'):
         operations.append('Combined')
     if args.test in ('all', 'operations'):
         operations.extend(['Translation', 'Rotation', 'Scaling'])
+    if not operations:
+        return []
+
+    cpu_only = args.cpu_only or not backend.gpu_available()
+    if cpu_only:
+        print(
+            'CPU only.' if args.cpu_only else 'Working CuPy/CUDA device unavailable; GPU omitted.'
+        )
     rows = run_benchmarks(args.points, args.runs, cpu_only=cpu_only, operations=operations)
     print_results(rows)
     return rows

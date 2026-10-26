@@ -76,15 +76,15 @@ def _(np):
 
 @app.cell
 def _(CoordinateSystem, child_angle, inherit_scale, parent_angle, parent_scale, points, pq):
-    reference = CoordinateSystem()
-    main = CoordinateSystem()
-    child = main.add_child(label='Child')
-    child.add_points(points, label='cloud', space='local')
+    reference = CoordinateSystem(name='Reference')
+    main = CoordinateSystem(name='Main')
+    child = CoordinateSystem(parent=main, name='Child')
+    child.add_points(points, 'cloud')
     child.translate([2, 2, 0] * pq.m)
-    child.rotate_euler_local([0, 1, 1], child_angle.value * pq.deg)
+    child.rotate([0, 1, 1], child_angle.value * pq.deg)
 
     main.scale(parent_scale.value, inherit=inherit_scale.value)
-    _ = main.rotate_euler_local([1, 0, 0], parent_angle.value * pq.deg, inherit=True)
+    _ = main.rotate([1, 0, 0], parent_angle.value * pq.deg)
     return child, main, reference
 
 
@@ -118,12 +118,12 @@ def _(reset_view, viewer):
 @app.cell(hide_code=True)
 def _(child, main, mo, pq, reference):
     _rows = []
-    for _name, _frame in [('Reference', reference), ('Main', main), ('Child', child)]:
+    for _frame in (reference, main, child):
         _position = _frame.origin.rescale(pq.m).magnitude
         _rows.append(
             {
-                'Frame': _name,
-                'Parent': 'Main' if _frame.get_parent() is main else '—',
+                'Frame': _frame.name,
+                'Parent': _frame.parent.name if _frame.parent else '—',
                 'x (m)': round(float(_position[0]), 4),
                 'y (m)': round(float(_position[1]), 4),
                 'z (m)': round(float(_position[2]), 4),
@@ -135,11 +135,11 @@ def _(child, main, mo, pq, reference):
             mo.ui.table(_rows, selection=None, pagination=False, show_column_summaries=False),
             mo.md("""
         The parent rotates about the world x-axis. The child rotates about its
-        own origin, around the world axis `(0, 1, 1)`.
+        own origin, around its parent's axis `(0, 1, 1)`.
 
         With **Scale the child with its parent** unchecked, `inherit=False`
         changes the parent's axes while holding the child and its points fixed.
-        Rotation still uses `inherit=True`, so the child follows its parent.
+        Rotation keeps the default `inherit=True`, so the child follows its parent.
         """),
         ]
     )

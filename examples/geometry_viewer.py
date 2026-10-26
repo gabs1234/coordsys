@@ -35,7 +35,7 @@ def _unit_arrow_geometry():
 
 
 def _arrow_transform(origin, axis):
-    """Preserve the arrow's proportions even for skewed or nonuniform frame bases."""
+    """Place a unit arrow along ``axis``, keeping its proportions for any axis length."""
     length = np.linalg.norm(axis)
     direction = axis / length
     helper = np.eye(3)[np.argmin(np.abs(direction))]
@@ -147,14 +147,11 @@ class GeometryViewer:
             origin, basis = matrix[:3, 3], matrix[:3, :3].T
             bounds.extend([origin, *(origin + 1.12 * basis)])
             for i, (label, axis) in enumerate(zip(labels, basis)):
-                # Transform each arrow independently so frame scale/shear changes
-                # its direction and length without flattening its cross-section.
                 arrows.world_object.set_matrix_at(i, _arrow_transform(origin, axis))
                 label.offset = origin + 1.12 * axis
 
-        local = child.get_points('cloud', space='local')
-        local = local if isinstance(local, pq.Quantity) else local * child.unit
-        local = np.asarray(local.rescale(pq.m).magnitude, dtype=np.float32).reshape(-1, 3)
+        local = (child.get_points('cloud') * child.unit).rescale(pq.m).magnitude
+        local = np.asarray(local, dtype=np.float32).reshape(-1, 3)
         if not np.array_equal(local, self.cloud.data[:]):
             self.cloud.data = local
         matrix = child.world_transform.as_unit(pq.m).matrix

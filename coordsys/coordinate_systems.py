@@ -1,388 +1,346 @@
-"""Frames form a tree; each frame stores only a local-to-parent matrix.
-
-Matrices use metres internally. Attached points stay in local coordinates, so
-moving a frame does not traverse its descendants or rewrite its point clouds.
-"""
-
-import string
-from types import MappingProxyType
-
 import numpy as np
 import quantities as q
 
-from .transformations import Backend, Transformation
+from .backend import float_points, to_numpy
+from .rotation import Rotation
+from .transformations import Transformation
 from .utils import (
-    X_AX,
     Y_AX,
     Z_AX,
-    angle_radians,
-    float_dtype,
-    length_magnitude,
+    axis_angle_matrix,
+    conversion_factor,
+    finite_scalar,
+    homogeneous,
     length_unit,
-    unit_vector,
+    magnitude,
     vector3,
 )
 
+REFERENCES = ('parent', 'world', 'local')
+SPACES = ('local', 'world')
+IDENTITY = np.eye(4)
+IDENTITY.flags.writeable = False
 
-def _new_label(mapping):
-    for index in range(len(mapping) + 1):
-        suffix = str(index // 26) if index >= 26 else ''
-        label = string.ascii_uppercase[index % 26] + suffix
-        if label not in mapping:
-            return label
+
+def _inverse(pose):
+    """Inverse of a 4x4 pose ``[[s R, t], [0, 1]]``, without a general matrix inversion."""
+    linear = pose[:3, :3]
+    inverse_linear = linear.T / (linear[:, 0] @ linear[:, 0])
+    return homogeneous(inverse_linear, -inverse_linear @ pose[:3, 3])
 
 
 class CoordinateSystem:
-    """An invertible affine frame with optional children and point clouds.
+    """A coordinate frame: an origin, an orientation and a uniform scale.
 
-    ``origin`` and ``u/v/w`` describe the world pose. Bare coordinates use
-    ``unit`` (metres by default); quantity inputs keep their own units.
-    Transform methods move the frame, attached points, and descendants together.
-    ``inherit=False`` holds the points and descendants fixed in world space.
+    Frames form a tree. Each frame stores its pose relative to its parent (or
+    to the world for a root), so children and attached points follow it.
+    Its axes ``u``, ``v`` and ``w`` are always orthogonal and of equal length.
+
+    Bare numbers are read in ``unit`` (the parent's unit by default, else
+    metres); quantities may use any length unit.
+
+    Motion methods take ``relative_to='parent' | 'world' | 'local'``: their
+    arguments are coordinates in that frame. With ``inherit=False``, the
+    frame's points and children stay where they are in the world.
     """
 
-    def __init__(self, u=None, v=None, w=None, origin=None, device=None, *, dtype=None, unit=q.m):
-        self.dtype = float_dtype(dtype)
-        self.unit = length_unit(unit)
-        self._device = Backend(device)._current
+    def __init__(
+        self, origin=(0, 0, 0), rotation=None, scale=1.0, *, parent=None, name=None, unit=None
+    ):
+        if unit is None and parent is not None:
+            self.unit, self._metres_per_unit = parent.unit, parent._metres_per_unit
+        else:
+            self.unit = length_unit(q.m if unit is None else unit)
+            self._metres_per_unit = conversion_factor(self.unit, q.m)
+        self._name = name
         self._parent = None
         self._children = {}
+        self._named_children = {}
         self._points = {}
-        self._local = np.eye(4, dtype=self.dtype)
-        self._local[:3, :3] = np.column_stack(
-            [
-                vector3(X_AX if u is None else u, 'u', self.dtype),
-                vector3(Y_AX if v is None else v, 'v', self.dtype),
-                vector3(Z_AX if w is None else w, 'w', self.dtype),
-            ]
-        )
-        if origin is not None:
-            self._local[:3, 3] = self._metres(origin)
-        self._validate_pose(self._local)
+        self._cached_parent_world = self._cached_local = self._cached_world = None
 
-    def _metres(self, value):
-        magnitude = length_magnitude(value, self.unit, self.dtype)
-        factor = float(self.unit.rescale(q.m).magnitude)
-        return vector3(magnitude * factor, 'position', self.dtype)
+        if rotation is not None and not isinstance(rotation, Rotation):
+            raise TypeError('rotation must be a Rotation')
+        scale = self._scale_factor(scale)
+        linear = np.eye(3) if rotation is None else rotation.matrix
+        self._local = homogeneous(scale * linear, self._metres(origin, 'origin'))
+        if parent is not None:
+            self.set_parent(parent, keep_world=False)
 
-    @staticmethod
-    def _validate_pose(matrix):
-        if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
-            raise ValueError('frame pose must be a finite 4x4 matrix')
-        if not np.allclose(matrix[3], [0, 0, 0, 1], rtol=0, atol=1e-12):
-            raise ValueError('coordinate frames require affine transforms')
-        if np.linalg.slogdet(matrix[:3, :3])[0] == 0:
-            raise ValueError('frame axes must be linearly independent')
-
-    def _world_matrix(self):
-        matrix = self._local.copy()
-        parent = self._parent
-        while parent is not None:
-            matrix = parent._local @ matrix
-            parent = parent._parent
-        return matrix
-
-    def _transform(self, matrix):
-        return Transformation(matrix, self._device, matrix.dtype, unit=q.m).as_unit(self.unit)
+    # Tree
 
     @property
-    def local_transform(self):
-        """A snapshot mapping this frame to its parent, in this frame's unit."""
-        return self._transform(self._local)
+    def name(self):
+        return self._name
 
     @property
-    def world_transform(self):
-        """A snapshot mapping this frame to world coordinates, in its unit."""
-        return self._transform(self._world_matrix())
-
-    def _set_world(self, matrix, inherit=True):
-        matrix = np.array(matrix, dtype=self.dtype, copy=True)
-        self._validate_pose(matrix)
-        local = (
-            matrix
-            if self._parent is None
-            else np.linalg.solve(self._parent._world_matrix(), matrix)
-        )
-        points, children = self._points, {}
-        if not inherit:
-            # Re-express only direct attachments. Their world geometry stays put.
-            compensation = np.linalg.solve(matrix, self._world_matrix())
-            transform = self._transform(compensation)
-            points = {key: transform.apply(value) for key, value in self._points.items()}
-            children = {key: compensation @ child._local for key, child in self._children.items()}
-        self._local = local.astype(self.dtype)
-        self._points = points
-        for key, child_local in children.items():
-            self._children[key]._local = child_local
-        return self
-
-    @property
-    def origin(self):
-        return (self._world_matrix()[:3, 3] * q.m).rescale(self.unit)
-
-    @origin.setter
-    def origin(self, value):
-        matrix = self._world_matrix()
-        matrix[:3, 3] = self._metres(value)
-        self._set_world(matrix)
-
-    def _set_axis(self, index, value):
-        matrix = self._world_matrix()
-        matrix[:3, index] = vector3(value, 'axis', self.dtype)
-        self._set_world(matrix)
-
-    @property
-    def u(self):
-        return self._world_matrix()[:3, 0]
-
-    @u.setter
-    def u(self, value):
-        self._set_axis(0, value)
-
-    @property
-    def v(self):
-        return self._world_matrix()[:3, 1]
-
-    @v.setter
-    def v(self, value):
-        self._set_axis(1, value)
-
-    @property
-    def w(self):
-        return self._world_matrix()[:3, 2]
-
-    @w.setter
-    def w(self, value):
-        self._set_axis(2, value)
+    def parent(self):
+        return self._parent
 
     @property
     def children(self):
-        """Read-only mapping; use add_child/remove_child to change the tree."""
-        return MappingProxyType(self._children)
+        return tuple(self._children)
+
+    def child(self, name):
+        return self._named_children[name]
+
+    def set_parent(self, parent, *, keep_world=True):
+        """Attach this frame to ``parent``, or detach it with ``None``.
+
+        By default the frame keeps its world pose. With ``keep_world=False``
+        its current pose is reinterpreted relative to the new parent.
+        """
+        if parent is not None:
+            if not isinstance(parent, CoordinateSystem):
+                raise TypeError('parent must be a CoordinateSystem or None')
+            ancestor = parent
+            while ancestor is not None:
+                if ancestor is self:
+                    raise ValueError('a frame cannot be its own ancestor')
+                ancestor = ancestor._parent
+            sibling = parent._named_children.get(self._name)
+            if sibling is not None and sibling is not self:
+                raise ValueError(f'{parent!r} already has a child named {self._name!r}')
+
+        if keep_world:
+            world = self._world()
+            self._local = world.copy() if parent is None else _inverse(parent._world()) @ world
+        if self._parent is not None:
+            del self._parent._children[self]
+            self._parent._named_children.pop(self._name, None)
+        if parent is not None:
+            parent._children[self] = None
+            if self._name is not None:
+                parent._named_children[self._name] = self
+        self._parent = parent
+        return self
+
+    # Pose
+
+    def _world(self):
+        """World pose as a read-only 4x4 matrix in metres.
+
+        Poses are replaced, never modified in place, so a cached world pose is
+        valid while its inputs (parent world pose, local pose) are the same objects.
+        """
+        chain, frame = [], self
+        while frame is not None:
+            chain.append(frame)
+            frame = frame._parent
+        world = IDENTITY
+        for frame in reversed(chain):
+            if frame._cached_parent_world is not world or frame._cached_local is not frame._local:
+                frame._cached_parent_world, frame._cached_local = world, frame._local
+                frame._cached_world = world @ frame._local
+                frame._cached_world.flags.writeable = False
+            world = frame._cached_world
+        return world
+
+    def _parent_world(self):
+        return IDENTITY if self._parent is None else self._parent._world()
+
+    def _in_unit(self, pose):
+        if self._metres_per_unit == 1:
+            return Transformation._trusted(pose.copy(), self.unit)
+        matrix = pose.copy()
+        matrix[:3, 3] /= self._metres_per_unit
+        return Transformation._trusted(matrix, self.unit)
 
     @property
-    def points(self):
-        return self.get_points()
+    def local_transform(self):
+        """Snapshot of the map from this frame's coordinates to its parent's, in ``unit``."""
+        return self._in_unit(self._local)
 
-    def add_points(self, points, label=None, *, space='world'):
-        """Attach a copy of points; world input is the compatibility default."""
-        if space not in ('world', 'local'):
-            raise ValueError('space must be world or local')
-        label = _new_label(self._points) if label is None else label
-        if label in self._points:
-            raise ValueError(f'point label already exists: {label}')
-        if isinstance(points, q.Quantity):
-            points.rescale(q.m)  # Validate dimensions without changing display units.
-            points = points.astype(self.dtype)
-        elif isinstance(points, (list, tuple)):
-            points = length_magnitude(points, self.unit, self.dtype)
-        else:
-            # Preserve GPU residency if the caller supplied a GPU array.
-            points = (
-                points.astype(self.dtype)
-                if hasattr(points, 'astype')
-                else np.asarray(points, dtype=self.dtype)
-            )
-        if points.ndim == 0 or points.shape[-1] != 3:
-            raise ValueError('points must have shape (..., 3)')
-        self._points[label] = self.to_local(points) if space == 'world' else points.copy()
-        return label
+    @property
+    def world_transform(self):
+        """Snapshot of the map from this frame's coordinates to world coordinates, in ``unit``."""
+        return self._in_unit(self._world())
 
-    def remove_points(self, label):
-        if label not in self._points:
-            return False
-        del self._points[label]
-        return True
+    @property
+    def origin(self):
+        return self._world()[:3, 3] / self._metres_per_unit * self.unit
 
-    def get_points(self, label=None, *, space='world'):
-        """Return a point cloud (or dictionary of clouds), as independent arrays."""
-        if space not in ('world', 'local'):
-            raise ValueError('space must be world or local')
-        convert = self.world_transform.apply if space == 'world' else lambda value: value.copy()
-        if label is not None:
-            return convert(self._points[label])
-        return {key: convert(value) for key, value in self._points.items()}
+    @property
+    def scale_factor(self):
+        return float(np.cbrt(np.linalg.det(self._world()[:3, :3])))
 
-    def to_global(self, points):
+    @property
+    def rotation(self):
+        return Rotation._trusted(self._world()[:3, :3] / self.scale_factor)
+
+    @property
+    def u(self):
+        return self._world()[:3, 0].copy()
+
+    @property
+    def v(self):
+        return self._world()[:3, 1].copy()
+
+    @property
+    def w(self):
+        return self._world()[:3, 2].copy()
+
+    # Coordinates
+
+    def to_world(self, points):
+        """Convert points from this frame's coordinates to world coordinates."""
         return self.world_transform.apply(points)
 
     def to_local(self, points):
-        return self.world_transform.inverse().apply(points)
+        """Convert points from world coordinates to this frame's coordinates."""
+        return self._in_unit(_inverse(self._world())).apply(points)
 
-    get_global_coordinates = to_global
-    get_local_coordinates = to_local
+    # Motion
 
-    def get_parent(self):
-        return self._parent
+    def translate(self, offset, *, relative_to='parent', inherit=True):
+        motion = homogeneous(np.eye(3), self._metres(offset, 'offset'))
+        return self._move(motion, relative_to, inherit)
 
-    def has_child(self, label):
-        return label in self._children
+    def rotate(self, axis, angle, *, pivot=None, relative_to='parent', inherit=True):
+        """Rotate about ``axis`` through ``pivot`` (default: this frame's origin)."""
+        rotation = axis_angle_matrix(axis, angle)
+        if pivot is None:
+            pivot = self._pose_in(relative_to)[:3, 3]
+        else:
+            pivot = self._metres(pivot, 'pivot')
+        return self._move(homogeneous(rotation, pivot - rotation @ pivot), relative_to, inherit)
 
-    def add_child(self, child=None, label=None, *, keep_world=True):
-        """Create a coincident child, or attach/reparent an existing frame.
+    def scale(self, factor, *, inherit=True):
+        """Multiply the axis lengths by ``factor``, about this frame's origin."""
+        motion = homogeneous(self._scale_factor(factor) * np.eye(3))
+        return self._move(motion, 'local', inherit)
 
-        Existing frames keep their world pose by default. With keep_world=False,
-        their previous local matrix is used relative to this parent instead.
+    def flip(self, *, inherit=True):
+        """Reverse all three axes. This changes the frame's handedness."""
+        return self.scale(-1, inherit=inherit)
+
+    def set_position(self, position, *, relative_to='parent', inherit=True):
+        target = self._pose_in(relative_to).copy()
+        target[:3, 3] = self._metres(position, 'position')
+        return self._place(target, relative_to, inherit)
+
+    def set_spherical(self, r, theta, phi, *, relative_to='parent', inherit=True):
+        """Place the origin at (r, theta, phi), with ``w`` pointing radially outward.
+
+        ``theta`` is the polar angle from z and ``phi`` the azimuth from x.
+        ``u`` points towards increasing theta and ``v`` towards increasing phi.
         """
-        label = _new_label(self._children) if label is None else label
-        if label in self._children:
-            raise ValueError(f'child label already exists: {label}')
-        if child is None:
-            child = CoordinateSystem(device=self._device, dtype=self.dtype, unit=self.unit)
-            keep_world = False
-        if not isinstance(child, CoordinateSystem):
-            raise TypeError('child must be a CoordinateSystem')
-        parent = self
-        while parent is not None:
-            if parent is child:
-                raise ValueError('a frame cannot be its own ancestor')
-            parent = parent._parent
-        local = (
-            np.linalg.solve(self._world_matrix(), child._world_matrix())
-            if keep_world
-            else child._local.copy()
-        )
-        # Compute everything that can fail before changing either tree.
-        if child._parent is not None:
-            old_parent = child._parent
-            old_label = next(key for key, value in old_parent._children.items() if value is child)
-            del old_parent._children[old_label]
-        child._local = local
-        child._parent = self
-        self._children[label] = child
-        return child
+        radius = finite_scalar(r, 'r', self.unit) * self._metres_per_unit
+        if radius < 0:
+            raise ValueError('r must be nonnegative')
+        rotation = axis_angle_matrix(Z_AX, phi) @ axis_angle_matrix(Y_AX, theta)
+        scale = np.cbrt(np.linalg.det(self._pose_in(relative_to)[:3, :3]))
+        target = homogeneous(scale * rotation, radius * rotation[:, 2])
+        return self._place(target, relative_to, inherit)
 
-    def remove_child(self, label):
-        """Detach a child, preserving its world pose and attached geometry."""
-        child = self._children[label]
-        world = child._world_matrix()
-        del self._children[label]
-        child._parent, child._local = None, world
-        return child
+    def _pose_in(self, relative_to):
+        """This frame's pose, in the coordinates of the ``relative_to`` frame."""
+        if relative_to == 'parent':
+            return self._local
+        if relative_to == 'world':
+            return self._world()
+        if relative_to == 'local':
+            return IDENTITY
+        raise ValueError(f'relative_to must be one of {REFERENCES}')
 
-    def translate(self, translation, inherit=True, label=None):
-        """Translate along a world-space vector."""
-        if label is not None:
-            return self._children[label].translate(translation, inherit)
-        matrix = self._world_matrix()
-        matrix[:3, 3] += self._metres(translation)
-        return self._set_world(matrix, inherit)
+    def _place(self, target, relative_to, inherit):
+        """Give this frame the pose ``target``, expressed in ``relative_to`` coordinates."""
+        if relative_to == 'world':
+            target = _inverse(self._parent_world()) @ target
+        elif relative_to == 'local':
+            target = self._local @ target
+        return self._set_local(target, inherit)
 
-    def translate_along_axis(self, axis, distance, inherit=True, label=None):
-        if label is not None:
-            return self._children[label].translate_along_axis(axis, distance, inherit)
-        return self.translate(unit_vector(axis) * distance, inherit)
+    def _move(self, motion, relative_to, inherit):
+        """Apply ``motion``, expressed in ``relative_to`` coordinates."""
+        return self._place(motion @ self._pose_in(relative_to), relative_to, inherit)
 
-    def set_cartesian_coordinates(self, x, y, z, inherit=True, label=None):
-        if label is not None:
-            return self._children[label].set_cartesian_coordinates(x, y, z, inherit)
-        matrix = self._world_matrix()
-        matrix[:3, 3] = self._metres([x, y, z])
-        return self._set_world(matrix, inherit)
+    def _set_local(self, local, inherit):
+        if not inherit:
+            correction = _inverse(local) @ self._local
+            for child in self._children:
+                child._local = correction @ child._local
+            transform = self._in_unit(correction)
+            self._points = {label: transform.apply(value) for label, value in self._points.items()}
+        self._local = local
+        return self
 
-    def set_spherical_coordinates(self, r, theta, phi, inherit=True, label=None):
-        """Set world pose: theta is polar angle, phi azimuth; w points radially."""
-        if label is not None:
-            return self._children[label].set_spherical_coordinates(r, theta, phi, inherit)
-        radius = length_magnitude(r, self.unit)
-        if radius.shape != () or not np.isfinite(radius) or radius < 0:
-            raise ValueError('radius must be a finite nonnegative scalar')
-        theta, phi = angle_radians(theta), angle_radians(phi)
-        st, ct, sp, cp = np.sin(theta), np.cos(theta), np.sin(phi), np.cos(phi)
-        matrix = np.eye(4, dtype=self.dtype)
-        matrix[:3, :3] = np.array([[cp * ct, -sp, cp * st], [sp * ct, cp, sp * st], [-st, 0, ct]])
-        matrix[:3, 3] = self._metres(radius * matrix[:3, 2])
-        return self._set_world(matrix, inherit)
+    def _metres(self, value, name):
+        return vector3(value, name, self.unit) * self._metres_per_unit
 
-    def rotate_euler(self, pivot, axis, angle, inherit=True, label=None):
-        """Legacy name for an axis-angle rotation; pivot and axis are in world space."""
-        if label is not None:
-            return self._children[label].rotate_euler(pivot, axis, angle, inherit)
-        pivot = self._metres(pivot)
-        transform = Transformation(dtype=self.dtype).rotation(angle, axis).matrix
-        transform[:3, 3] = pivot - transform[:3, :3] @ pivot
-        return self._set_world(transform @ self._world_matrix(), inherit)
+    @staticmethod
+    def _scale_factor(value):
+        value = finite_scalar(value, 'scale')
+        if value == 0:
+            raise ValueError('scale must be nonzero')
+        return value
 
-    def rotate_euler_local(self, axis, angle, inherit=True, label=None):
-        """Rotate about this frame's origin; axis is still a world-space vector."""
-        if label is not None:
-            return self._children[label].rotate_euler_local(axis, angle, inherit)
-        return self.rotate_euler(self.origin, axis, angle, inherit)
+    # Points
 
-    def scale(self, scale, inherit=True):
-        return self.scale_pointwise(scale, scale, scale, inherit)
+    def add_points(self, points, label, *, space='local'):
+        """Attach a copy of ``points`` (shape ``(..., 3)``) under ``label``.
 
-    def scale_pointwise(self, s1, s2, s3, inherit=True):
-        """Multiply the existing local axes about this frame's origin."""
-        factors = vector3([s1, s2, s3], 'scale factors', self.dtype)
-        matrix = self._world_matrix()
-        matrix[:3, :3] *= factors
-        return self._set_world(matrix, inherit)
+        Points are stored in this frame's coordinates and unit, keeping their
+        dtype and device, and move with the frame.
+        """
+        if space not in SPACES:
+            raise ValueError(f'space must be one of {SPACES}')
+        if label in self._points:
+            raise ValueError(f'point label already exists: {label!r}')
+        if isinstance(points, (q.Quantity, list, tuple)):
+            points = magnitude(points, self.unit)
+        points = float_points(points)
+        self._points[label] = self.to_local(points) if space == 'world' else points.copy()
 
-    def normalize(self, inherit=True):
-        """Give each axis unit length; this does not orthogonalize a skew frame."""
-        lengths = np.linalg.norm(self._world_matrix()[:3, :3], axis=0)
-        return self.scale_pointwise(*(1 / lengths), inherit=inherit)
+    def remove_points(self, label):
+        """Detach the points stored under ``label`` and return them, in local coordinates."""
+        return self._points.pop(label)
 
-    def to_opposite(self, inherit=True):
-        """Reverse all three axes (a reflection, changing handedness)."""
-        return self.scale(-1, inherit)
+    def get_points(self, label, *, space='local'):
+        """A copy of the points stored under ``label``, in this frame's unit."""
+        if space not in SPACES:
+            raise ValueError(f'space must be one of {SPACES}')
+        points = self._points[label]
+        return self.to_world(points) if space == 'world' else points.copy()
 
-    def get_symmetric(self, r, axis=None):
-        """Return an independent frame displaced along a local axis (default z)."""
-        axis = unit_vector(Z_AX if axis is None else axis)
-        offset = axis * length_magnitude(r, self.unit)
-        return CoordinateSystem(
-            self.u,
-            self.v,
-            self.w,
-            self.to_global(offset),
-            self._device,
-            dtype=self.dtype,
-            unit=self.unit,
-        )
+    @property
+    def point_labels(self):
+        return tuple(self._points)
 
-    def get_antisymmetric(self, r, axis=None):
-        return self.get_symmetric(r, axis).to_opposite()
+    # Display
 
-    def add_symmetric_child(self, label=None, r=None):
-        return self.add_child(self.get_symmetric(1 * self.unit if r is None else r), label)
-
-    def add_antisymmetric_child(self, label=None, r=None):
-        return self.add_child(self.get_antisymmetric(1 * self.unit if r is None else r), label)
-
-    def visualize(self, plotter=None, cmap='viridis', inherit=True, show_points=True):
-        """Draw world geometry in this frame's unit; plotting imports are optional."""
+    def visualize(self, plotter=None, cmap='viridis', children=True, show_points=True):
+        """Draw the frame (and its descendants) in world coordinates with PyVista."""
         try:
             import pyvista as pv
             from matplotlib import colormaps
         except ImportError as exc:
             raise ImportError("visualize requires pip install 'coordsys[visualization]'") from exc
+
         plotter = pv.Plotter() if plotter is None else plotter
-        colors = colormaps[cmap](np.linspace(0, 1, 3))
-        pending = [self]
-        while pending:
-            frame = pending.pop()
-            world = frame._world_matrix()
-            origin = (world[:3, 3] * q.m).rescale(self.unit).magnitude
-            for index, color in enumerate(colors):
-                plotter.add_arrows(origin, world[:3, index], color=color)
+        axis_colors = colormaps[cmap](np.linspace(0, 1, 3))
+        frames = [self]
+        while frames:
+            frame = frames.pop()
+            origin = frame.origin.rescale(self.unit).magnitude
+            for axis, color in zip((frame.u, frame.v, frame.w), axis_colors):
+                plotter.add_arrows(origin, axis, color=color)
             plotter.add_points(origin, color='black')
             if show_points:
-                for index, points in enumerate(frame.get_points().values()):
-                    if not isinstance(points, q.Quantity):
-                        points = Backend.to_numpy(points) * frame.unit
-                    points = points.rescale(self.unit).magnitude.reshape(-1, 3)
-                    if len(points):
+                for index, label in enumerate(frame._points):
+                    points = to_numpy(frame.get_points(label, space='world'))
+                    points = points * conversion_factor(frame.unit, self.unit)
+                    if points.size:
                         plotter.add_points(
-                            points,
+                            points.reshape(-1, 3),
                             color=colormaps['tab10'](index % 10),
                             point_size=10,
                             render_points_as_spheres=True,
                         )
-            if inherit:
-                pending.extend(reversed(tuple(frame._children.values())))
+            if children:
+                frames.extend(reversed(frame.children))
         return plotter
 
-    def __str__(self):
-        return f'CoordinateSystem(origin={self.origin}, u={self.u}, v={self.v}, w={self.w})'
+    def __repr__(self):
+        name = '' if self._name is None else f'{self._name!r}, '
+        return f'CoordinateSystem({name}origin={self.origin}, scale={self.scale_factor:g})'

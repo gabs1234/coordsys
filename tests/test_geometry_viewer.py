@@ -29,15 +29,12 @@ class GeometryViewerTests(unittest.TestCase):
 
     def make_viewer(self):
         reference = CoordinateSystem()
-        main = CoordinateSystem(origin=[100, 0, 0], unit=q.cm)
-        main.rotate_euler_local([0, 0, 1], 90 * q.deg)
-        main.scale_pointwise(2, 3, 4)
-        child = main.add_child(
-            CoordinateSystem(origin=[1000, 0, 0], unit=q.mm),
-            keep_world=False,
-        )
+        main = CoordinateSystem([100, 0, 0], unit=q.cm)
+        main.rotate([0, 0, 1], 90 * q.deg)
+        main.scale(2)
+        child = CoordinateSystem([1000, 0, 0], parent=main, unit=q.mm)
         points = np.array([[1000, 0, 0], [0, 1000, 0]]) * q.mm
-        child.add_points(points, label='cloud', space='local')
+        child.add_points(points, 'cloud')
         viewer = self.Viewer(points.rescale(q.m).magnitude, canvas=self.Canvas(size=(640, 480)))
         self.addCleanup(viewer.close)
         viewer.update(reference, main, child)
@@ -51,17 +48,16 @@ class GeometryViewerTests(unittest.TestCase):
 
     def test_rendered_points_and_arrow_endpoints_with_mixed_units_and_scale(self):
         viewer, _, _, _ = self.make_viewer()
-        assert_allclose(self.rendered_points(viewer), [[1, 4, 0], [-2, 2, 0]], atol=2e-6)
+        assert_allclose(self.rendered_points(viewer), [[1, 4, 0], [-1, 2, 0]], atol=2e-6)
         mesh = viewer.arrows[2].world_object
         vertices = mesh.geometry.positions.data
         tail = [0, 0, vertices[:, 2].min(), 1]
         tip = [0, 0, vertices[:, 2].max(), 1]
-        for i, direction in enumerate(([0, 2, 0], [-3, 0, 0], [0, 0, 4])):
+        for i, direction in enumerate(([0, 2, 0], [-2, 0, 0], [0, 0, 2])):
             matrix = mesh.world.matrix @ mesh.get_matrix_at(i)
             assert_allclose((matrix @ tail)[:3], [1, 2, 0], atol=2e-6)
             assert_allclose((matrix @ tip)[:3], np.array([1, 2, 0]) + direction, atol=2e-6)
-            # Check the actual mesh: a short head and circular cross-section,
-            # unaffected by the different scale factors on the frame's axes.
+            # The arrow keeps a short head and a circular cross-section.
             length = np.linalg.norm(direction)
             relative = vertices @ matrix[:3, :3].T
             axial = relative @ (direction / length)
