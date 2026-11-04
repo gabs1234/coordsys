@@ -7,10 +7,14 @@ Nested 3D coordinate frames and point-cloud transformations, with physical units
 From the repository:
 
 ```bash
-pip install -e ".[visualization]"
+uv sync --extra visualization
 ```
 
 ## Usage
+
+```bash
+uv run --extra visualization python examples/simple_transform.py --show
+```
 
 ```python
 from pyframetree import CoordinateSystem
