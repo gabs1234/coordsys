@@ -315,7 +315,7 @@ class CoordinateSystem:
             import pyvista as pv
             from matplotlib import colormaps
         except ImportError as exc:
-            raise ImportError("visualize requires pip install 'coordsys[visualization]'") from exc
+            raise ImportError("visualize requires pip install 'pyframetree[visualization]'") from exc
 
         plotter = pv.Plotter() if plotter is None else plotter
         axis_colors = colormaps[cmap](np.linspace(0, 1, 3))

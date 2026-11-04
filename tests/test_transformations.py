@@ -7,7 +7,7 @@ import numpy as np
 import quantities as q
 from numpy.testing import assert_allclose
 
-from coordsys import Rotation, Transformation, gpu_available
+from pyframetree import Rotation, Transformation, gpu_available
 
 
 def rodrigues(axis, angle, vector):
@@ -202,7 +202,7 @@ class BackendTests(unittest.TestCase):
                 sys.executable,
                 '-B',
                 '-c',
-                "import coordsys, sys; assert not {'cupy','pyvista','matplotlib'} & sys.modules.keys()",
+                "import pyframetree, sys; assert not {'cupy','pyvista','matplotlib'} & sys.modules.keys()",
             ],
             check=True,
         )
@@ -220,7 +220,7 @@ class GPUTests(unittest.TestCase):
 
     def test_gpu_frame_points_stay_on_gpu(self):
         cp = importlib.import_module('cupy')
-        from coordsys import CoordinateSystem
+        from pyframetree import CoordinateSystem
 
         root = CoordinateSystem()
         child = CoordinateSystem(parent=root)

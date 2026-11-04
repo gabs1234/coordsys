@@ -11,7 +11,7 @@ def _():
     import quantities as pq
     from geometry_viewer import GeometryViewer
 
-    from coordsys import CoordinateSystem
+    from pyframetree import CoordinateSystem
 
     mo.output.clear()  # Hide fastplotlib's optional Jupyter logo/device banner.
     return CoordinateSystem, GeometryViewer, mo, np, pq

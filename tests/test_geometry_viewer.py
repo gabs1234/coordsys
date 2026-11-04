@@ -10,7 +10,7 @@ import numpy as np
 import quantities as q
 from numpy.testing import assert_allclose
 
-from coordsys import CoordinateSystem
+from pyframetree import CoordinateSystem
 
 
 @unittest.skipUnless(

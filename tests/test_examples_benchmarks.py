@@ -23,15 +23,9 @@ class UsageTests(unittest.TestCase):
         assert_allclose(child.to_world(child.to_local(points)), points, rtol=0, atol=1e-13)
         self.assertIs(child.parent, root)
 
-    def test_readme_python_examples(self):
-        readme = Path(__file__).resolve().parents[1] / 'README.md'
-        namespace = {}
-        for code in re.findall(r'```python\n(.*?)```', readme.read_text(), re.DOTALL):
-            exec(compile(code, str(readme), 'exec'), namespace)
-
     def test_cpu_only_benchmark_never_requests_gpu(self):
         with patch(
-            'coordsys.backend.gpu_available', side_effect=AssertionError('must not probe GPU')
+            'pyframetree.backend.gpu_available', side_effect=AssertionError('must not probe GPU')
         ):
             rows = run_benchmarks(
                 [3, 10],
@@ -47,7 +41,7 @@ class UsageTests(unittest.TestCase):
                 self.assertGreaterEqual(row[key], 0)
 
     def test_missing_gpu_omitted_and_cli_operations_dispatch(self):
-        with patch('coordsys.backend.gpu_available', return_value=False):
+        with patch('pyframetree.backend.gpu_available', return_value=False):
             with contextlib.redirect_stdout(io.StringIO()):
                 rows = main(['--test', 'operations', '--points', '3', '--runs', '1'])
         self.assertEqual({row['operation'] for row in rows}, {'Translation', 'Rotation', 'Scaling'})
@@ -69,10 +63,18 @@ class UsageTests(unittest.TestCase):
     'optional visualization dependencies unavailable',
 )
 class VisualizationTests(unittest.TestCase):
+    def test_readme_python_examples(self):
+        readme = Path(__file__).resolve().parents[1] / 'README.md'
+        namespace = {}
+        # Exercise the example without opening a window or overwriting its illustration.
+        with patch('pyvista.Plotter'):
+            for code in re.findall(r'```python\n(.*?)```', readme.read_text(), re.DOTALL):
+                exec(compile(code, str(readme), 'exec'), namespace)
+
     def test_world_geometry_and_flags_without_opening_a_window(self):
         import quantities as q
 
-        from coordsys import CoordinateSystem
+        from pyframetree import CoordinateSystem
 
         class Plotter:
             def __init__(self):

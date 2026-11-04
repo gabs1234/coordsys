@@ -7,9 +7,9 @@ from pathlib import Path
 if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from coordsys import backend
 from performance import benchmark_frames
 from performance.benchmark_transformations import print_results, run_benchmarks
+from pyframetree import backend
 
 
 def main(argv=None):

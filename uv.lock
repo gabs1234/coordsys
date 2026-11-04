@@ -615,53 +615,6 @@ wheels = [
 ]
 
 [[package]]
-name = "coordsys"
-version = "0.3.0"
-source = { editable = "." }
-dependencies = [
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
-    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "quantities" },
-]
-
-[package.optional-dependencies]
-visualization = [
-    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "pyvista" },
-]
-
-[package.dev-dependencies]
-notebook = [
-    { name = "anywidget", marker = "python_full_version >= '3.11'" },
-    { name = "fastplotlib", marker = "python_full_version >= '3.11'" },
-    { name = "ipython", marker = "python_full_version >= '3.11'" },
-    { name = "marimo", marker = "python_full_version >= '3.11'" },
-    { name = "rendercanvas", marker = "python_full_version >= '3.11'" },
-    { name = "simplejpeg", marker = "python_full_version >= '3.11'" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.6" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "pyvista", marker = "extra == 'visualization'", specifier = ">=0.43" },
-    { name = "quantities", specifier = ">=0.16" },
-]
-provides-extras = ["visualization"]
-
-[package.metadata.requires-dev]
-notebook = [
-    { name = "anywidget", marker = "python_full_version >= '3.11'", specifier = ">=0.9" },
-    { name = "fastplotlib", marker = "python_full_version >= '3.11'", specifier = ">=0.7,<0.8" },
-    { name = "ipython", marker = "python_full_version >= '3.11'", specifier = ">=8" },
-    { name = "marimo", marker = "python_full_version >= '3.11'", specifier = ">=0.25.2" },
-    { name = "rendercanvas", marker = "python_full_version >= '3.11'", specifier = ">=2.7.2,<2.8" },
-    { name = "simplejpeg", marker = "python_full_version >= '3.11'", specifier = ">=1.8" },
-]
-
-[[package]]
 name = "cycler"
 version = "0.12.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2317,6 +2270,53 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cb/27/eeb9f307bf07060f3d9f9aa0fb8c15b01bdfded0a941e4b2719c7f94cacd/pycparser-3.12.tar.gz", hash = "sha256:f03387877eab82ce01bbdfd0ba7252ee55a90b1c708d5129e2ce915475cf1db6", size = 158785, upload-time = "2026-10-22T13:40:03.56Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/ae/315bbeee126a769cbde43cf4908acb4b40408d8bf8bbf334dd7368d8dadf/pycparser-3.12-py3-none-any.whl", hash = "sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e", size = 62600, upload-time = "2026-10-22T13:40:02.021Z" },
+]
+
+[[package]]
+name = "pyframetree"
+version = "0.3.0"
+source = { editable = "." }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "quantities" },
+]
+
+[package.optional-dependencies]
+visualization = [
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pyvista" },
+]
+
+[package.dev-dependencies]
+notebook = [
+    { name = "anywidget", marker = "python_full_version >= '3.11'" },
+    { name = "fastplotlib", marker = "python_full_version >= '3.11'" },
+    { name = "ipython", marker = "python_full_version >= '3.11'" },
+    { name = "marimo", marker = "python_full_version >= '3.11'" },
+    { name = "rendercanvas", marker = "python_full_version >= '3.11'" },
+    { name = "simplejpeg", marker = "python_full_version >= '3.11'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "matplotlib", marker = "extra == 'visualization'", specifier = ">=3.6" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "pyvista", marker = "extra == 'visualization'", specifier = ">=0.43" },
+    { name = "quantities", specifier = ">=0.16" },
+]
+provides-extras = ["visualization"]
+
+[package.metadata.requires-dev]
+notebook = [
+    { name = "anywidget", marker = "python_full_version >= '3.11'", specifier = ">=0.9" },
+    { name = "fastplotlib", marker = "python_full_version >= '3.11'", specifier = ">=0.7,<0.8" },
+    { name = "ipython", marker = "python_full_version >= '3.11'", specifier = ">=8" },
+    { name = "marimo", marker = "python_full_version >= '3.11'", specifier = ">=0.25.2" },
+    { name = "rendercanvas", marker = "python_full_version >= '3.11'", specifier = ">=2.7.2,<2.8" },
+    { name = "simplejpeg", marker = "python_full_version >= '3.11'", specifier = ">=1.8" },
 ]
 
 [[package]]

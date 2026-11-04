@@ -10,7 +10,7 @@ if __package__ in (None, ''):
 import numpy as np
 import quantities as q
 
-from coordsys import CoordinateSystem
+from pyframetree import CoordinateSystem
 
 
 def make_scene():

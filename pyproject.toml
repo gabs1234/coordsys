@@ -3,9 +3,9 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "coordsys"
+name = "pyframetree"
 version = "0.3.0"
-description = "Readable, unit-aware 3D coordinate frames and vectorized transformations"
+description = "Nested 3D coordinate frames with physical units and vectorized transformations"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -32,7 +32,7 @@ notebook = [
 notebook = {requires-python = ">=3.11"}
 
 [tool.setuptools.packages.find]
-include = ["coordsys*"]
+include = ["pyframetree*"]
 
 [tool.ruff]
 line-length = 100
